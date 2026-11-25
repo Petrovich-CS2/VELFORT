@@ -1,6 +1,6 @@
 # VELFORT — Architecture
 
-Статус: **черновик, ожидает утверждения**. Связанные документы: [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md),
+Статус: **ревизия 2 (после [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md)), ожидает утверждения**. Связанные документы: [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md),
 [DATA_MODEL.md](DATA_MODEL.md), [THREAT_MODEL.md](THREAT_MODEL.md).
 
 ## 1. Общая схема
@@ -82,14 +82,21 @@ VELFORT/
    по списку и форму аргументов — это **дополнительный** уровень; основная валидация — в Rust.
 5. Каждая команда: строго типизированный DTO (`serde`, `deny_unknown_fields`), лимиты длины, проверка
    состояния сессии (Locked/Unlocked), единый тип ошибки `AppError { code, message_key }` без внутренних деталей.
+6. **Секреты, которые неизбежно проходят через JS** (решение v1, ARCHITECTURE_REVIEW §3.1):
+   Master Password при создании/разблокировке/смене/бэкапе и значения, вводимые пользователем в поля записей.
+   Для них: неуправляемые поля ввода (`ref`), без React state/store, очистка `input.value` сразу после отправки,
+   перезагрузка документа после unlock и lock. Полная изоляция от WebView в v1 **не обеспечивается**.
+7. **WebView2 user data folder** (cookies, LocalStorage, IndexedDb, PasswordAutosave и др. — по документации MS)
+   не используется для данных записей; путь UDF фиксируется и проверяется сканером сигнальных строк (SR-TEST-1);
+   автосохранение паролей и автозаполнение WebView2 отключаются (механизм — проверить в Phase 0.5, W6).
 
 ### 4.2. Каталог команд (этапы 1–4)
 
 | Команда | Состояние | Возвращает в JS | Примечание |
 |---|---|---|---|
 | `vault_list_recent` | любое | пути и имена файлов | |
-| `vault_create(path, password)` | Locked | `Ok` | калибровка KDF, прогресс событием |
-| `vault_unlock(path, password)` | Locked | `VaultInfo` | backoff |
+| `vault_create(path, password)` | Locked | `Ok` | калибровка KDF, прогресс событием; пароль проходит через JS (§4.1 п.6) |
+| `vault_unlock(path, password)` | Locked | `VaultInfo` | backoff; raw-тело `Uint8Array` — если подтвердится в W8 |
 | `vault_lock()` | любое | `Ok` | идемпотентна |
 | `vault_status()` | любое | `Locked/Unlocked` + таймер | |
 | `items_list(filter)` / `items_search(query)` | Unlocked | `ItemSummaryDto[]` (без секретов) | поиск в Rust по сводкам |
@@ -103,7 +110,7 @@ VELFORT/
 | `generator_generate(options)` | любое | сгенерированное значение | генерация в Rust; значение неизбежно отображается |
 | `generator_copy(options)` | любое | оценка энтропии | генерирует и копирует, не возвращая значение |
 | `auth_change_password(old, new)` | Unlocked | `Ok` | |
-| `backup_create(path)` / `backup_verify(path)` / `backup_restore(path, target)` | разные | отчёт | |
+| `backup_create(path, password)` / `backup_verify(path, password)` / `backup_restore(path, password, new_target)` | разные | отчёт | повторный ввод Master Password; восстановление только в новый файл (CRYPTOGRAPHY §7) |
 | `settings_get/update` | разные | | |
 | `activity_ping()` | Unlocked | — | продление таймера от активности в окне |
 
@@ -122,8 +129,8 @@ VELFORT/
 Источники блокировки (реализация в `security::lock`):
 
 1. **Ручная**: кнопка, `Ctrl+L`, пункт трея.
-2. **Бездействие**: таймер в Rust (по умолчанию 5 мин, настраивается 1–60 мин; «никогда» — не предлагается
-   либо только с предупреждением — вопрос на согласование). Активность = `activity_ping` из окна VELFORT
+2. **Бездействие**: таймер в Rust; **по умолчанию 5 мин**, настраивается 1–60 мин; **режима «Never» в v1 нет**
+   (решение владельца). Активность = `activity_ping` из окна VELFORT
    (дебаунс), а также опционально системное бездействие (`GetLastInputInfo`).
 3. **События ОС**: блокировка сеанса (`WTSRegisterSessionNotification` → `WTS_SESSION_LOCK`),
    переход в сон (`WM_POWERBROADCAST`/`PBT_APMSUSPEND`) — блокировка **до** засыпания.
@@ -158,11 +165,17 @@ VELFORT/
   `strip`, отключение devtools.
 * Frontend: зафиксированный `package-lock.json`, `npm ci`, минимальный набор (React, React DOM,
   `@tauri-apps/api`, Vite, TypeScript, тестовые инструменты); никаких CDN.
-* Установщик: Tauri bundler (NSIS и/или MSI), `VELFORT_<ver>_x64-setup.exe`. Подпись Authenticode — требует
-  сертификата (вопрос на согласование). WebView2 — системный Evergreen Runtime (на Windows 11 предустановлен —
-  подтвердить по документации Microsoft при подготовке установщика).
-* Автообновление по сети **отключено** (offline/privacy-first). Обновление — загрузкой нового установщика
-  вручную; вопрос о подписанном опциональном updater — на согласование.
+* Установщик: Tauri bundler, `VELFORT_<ver>_x64-setup.exe` (NSIS) и/или `.msi` (WiX; собирается только на Windows).
+  **NSIS по умолчанию ставит приложение per-user в `%LOCALAPPDATA%`** (документация Tauri) — для VELFORT требуется
+  `installMode: "perMachine"` (Program Files), чтобы бинарник не был доступен на запись процессам пользователя.
+* WebView2: по документации Microsoft Evergreen Runtime «included as part of the Windows 11 operating system»,
+  но Microsoft рекомендует проверять его наличие. Предложено `webviewInstallMode: offlineInstaller` (~127 МБ,
+  установка без сети) — решение владельца (ARCHITECTURE_REVIEW §6).
+* **Authenticode-подпись обязательна до публичного релиза** (решение владельца); без неё — предупреждения
+  SmartScreen, а Smart App Control в Windows 11 блокирует неизвестные неподписанные приложения (документация Tauri).
+* **Фоновых сетевых запросов в MVP нет.** В будущем — только ручная проверка обновлений по действию пользователя
+  с проверкой подписи; автообновления нет.
+* Локализация: русский — основной язык с этапа 1, английский — дополнительный; все строки через i18n-ключи.
 
 ## 8. Наблюдаемость без утечек
 
@@ -170,3 +183,18 @@ VELFORT/
   значений. Реализация: `tracing` с собственным форматтером и типами-обёртками `Redacted<T>`.
 * Нет телеметрии, crash-reporting SDK, сетевых вызовов. Проверяется тестом: сборка не содержит HTTP-клиента
   (`cargo tree` без `reqwest`/`hyper`/`ureq`) и e2e-тестом без сетевой активности.
+
+## 9. Хранение SQLite: режим журнала (ревизия 2)
+
+Предложено `PRAGMA journal_mode = DELETE` для v1 (решение владельца, ARCHITECTURE_REVIEW §6):
+хранилище остаётся одним файлом; после rekey и `VACUUM` в файле не остаётся старых страниц, а журнал удаляется
+после COMMIT. Документация SQLite указывает, что в режиме WAL файл журнала не усекается после checkpoint
+(раздел `journal_size_limit`), а раздел `secure_delete` не описывает WAL. Ограничение: удалённый файл журнала
+и старые страницы могут оставаться на уровне файловой системы/SSD (содержимое — только шифротексты).
+
+## 10. Изменения ревизии 2 (кратко)
+
+См. [ARCHITECTURE_REVIEW.md §2](ARCHITECTURE_REVIEW.md): путь Master Password через JS (§4.1 п.6), UDF WebView2
+(§4.1 п.7), автоблокировка без «Never» (§5), установка perMachine и подпись (§7), журнал DELETE (§9),
+бэкап с повторным вводом пароля и восстановлением в новый файл (§4.2, CRYPTOGRAPHY §7).
+Новая зависимость: `aead-stream` 0.6.0 (RustCrypto) для потокового шифрования бэкапов и вложений.

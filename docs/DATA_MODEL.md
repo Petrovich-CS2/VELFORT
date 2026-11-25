@@ -1,14 +1,15 @@
 # VELFORT — Data Model
 
-Статус: **черновик, ожидает утверждения**.
+Статус: **ревизия 2, ожидает утверждения**. Изменения: AAD с `purpose`, формат бэкапа, режим журнала, локальное состояние (см. [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md)).
 
 ## 1. Файлы на диске
 
 | Файл | Расположение (по умолчанию) | Содержимое | Шифрование |
 |---|---|---|---|
 | `<имя>.velfort` | выбирает пользователь; по умолчанию `%USERPROFILE%\Documents\VELFORT\` | SQLite-база хранилища | Все секреты и метаданные — AEAD на уровне полей; открыт только заголовок |
-| `<имя>.velfort-wal`, `-shm` | рядом | служебные файлы SQLite (если WAL) | Содержат только уже зашифрованные страницы данных |
-| `config.json` | `%APPDATA%\VELFORT\` | список недавних хранилищ, тема, язык, размер окна, `last_seen_generation` | Не секретно; `last_seen_generation` и пути — под DPAPI (`CryptProtectData`, область пользователя) |
+| `<имя>.velfort-journal` | рядом, только во время транзакции | rollback-журнал SQLite (`journal_mode=DELETE`) | Содержит только зашифрованные страницы |
+| WebView2 user data folder | путь задаётся Tauri — уточнить в W6 | кэш/хранилища WebView2 | Данные записей туда не пишутся; проверяется сканером |
+| `config.json` | `%APPDATA%\VELFORT\` | список недавних хранилищ, тема, язык, размер окна, `{vault_id, last_seen_generation, mac}` | Не секретно; `mac = HMAC-SHA-256(K_local, vault_id ‖ generation)` (CRYPTOGRAPHY §5.3) |
 | `<имя>_<дата>.velfort-backup` | выбирает пользователь | резервная копия | Полностью зашифрована (см. §6) |
 | Логи | `%LOCALAPPDATA%\VELFORT\logs\` | коды событий, без данных | Секретов не содержат по построению (SR-LOG) |
 
@@ -44,7 +45,7 @@ PRAGMA application_id = 0x56454C46;  -- 'VELF', идентификация фа�
 PRAGMA user_version  = 1;            -- версия схемы для миграций
 PRAGMA foreign_keys  = ON;
 PRAGMA secure_delete = ON;
-PRAGMA journal_mode  = WAL;          -- (обсуждается: DELETE проще для бэкапа одним файлом)
+PRAGMA journal_mode  = DELETE;       -- ревизия 2: один файл, без остатков WAL (ARCHITECTURE §9); требует решения
 PRAGMA synchronous   = FULL;
 
 CREATE TABLE vault_header (           -- ровно одна строка
@@ -66,8 +67,8 @@ CREATE TABLE vault_header (           -- ровно одна строка
 CREATE TABLE items (
   id          BLOB    PRIMARY KEY CHECK (length(id) = 16),
   revision    INTEGER NOT NULL CHECK (revision >= 1),
-  summary     BLOB    NOT NULL,   -- envelope: сводка для списка/поиска
-  payload     BLOB    NOT NULL    -- envelope: полные секретные поля
+  summary     BLOB    NOT NULL,   -- envelope, AAD purpose = ITEM_SUMMARY (0x10)
+  payload     BLOB    NOT NULL    -- envelope, AAD purpose = ITEM_PAYLOAD (0x11)
 );
 
 CREATE TABLE item_history (
@@ -164,26 +165,13 @@ struct ItemPayload {          // -> items.payload
 
 ## 6. Формат резервной копии `.velfort-backup`
 
-```
-magic "VELFORT-BACKUP\0" || backup_format(u16) || header_len(u32) || header (CBOR/бинарь)
-                         || chunks[] (STREAM-подобная схема: envelope на 1 MiB,
-                                      AAD = backup_id || idx || is_last)
-header = { vault_id, source_format_version, created_at, kdf params + salt + wrap_nonce + wrapped_dek
-           (копия заголовка хранилища), backup_id(16), sha256 открытого содержимого НЕ хранится }
-содержимое (после расшифровки) = консистентный снимок SQLite (VACUUM INTO во временный файл
-                                 в защищённой папке, затем потоковое шифрование и удаление)
-```
-
-* Ключ бэкапа: `HKDF(DEK, info="VELFORT/v1/backup", salt=backup_id)`.
-* Обрыв/усечение файла обнаруживается флагом `is_last` в AAD последнего чанка;
-  перестановка чанков — индексом в AAD.
-* Временный файл снимка уже содержит только зашифрованные поля (схема §3), но всё равно удаляется сразу.
-  `aead` 0.6 (проверено по исходнику 0.6.0) не содержит модуля `stream`, поэтому чанкование реализуется
-  тонкой обвязкой над `XChaCha20Poly1305` — с отдельными тестами на перестановку/усечение/дублирование.
+Полное описание — [CRYPTOGRAPHY.md §7](CRYPTOGRAPHY.md) (ревизия 2): отдельная соль и Argon2id от Master Password,
+случайный ключ бэкапа `BK`, потоковое шифрование `aead-stream` `StreamBE32` + XChaCha20-Poly1305, снимок БД
+через `Connection::serialize` в память без временного файла, восстановление только в новый файл.
 
 ## 7. Миграции
 
-1. Перед миграцией — автоматический бэкап (§6) рядом с файлом.
+1. Перед миграцией — защитная копия файла (CRYPTOGRAPHY §7.5; не требует пароля, файл зашифрован на уровне полей).
 2. Миграция выполняется в одной транзакции; `user_version` обновляется в той же транзакции.
 3. Неизвестная (более новая) версия формата/схемы → отказ открытия с сообщением «создано более новой версией
    VELFORT», **без попытки чтения**.
