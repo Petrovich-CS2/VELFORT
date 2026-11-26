@@ -1,6 +1,6 @@
 # VELFORT — Data Model
 
-Статус: **ревизия 3, ожидает утверждения**. Ревизия 2: AAD с `purpose`, режим журнала, локальное состояние ([ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md)). Ревизия 3: формат бэкапа без `aead-stream`, факты Phase 0.5 о файлах ([PHASE_0_5_VALIDATION_REPORT.md](PHASE_0_5_VALIDATION_REPORT.md)).
+Статус: **ревизия 4 (Phase 0.6, [PHASE_0_6_REPORT.md](PHASE_0_6_REPORT.md)); история ревизий сохранена ниже; ревизия 3 ожидает утверждения**. Ревизия 2: AAD с `purpose`, режим журнала, локальное состояние ([ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md)). Ревизия 3: формат бэкапа без `aead-stream`, факты Phase 0.5 о файлах ([PHASE_0_5_VALIDATION_REPORT.md](PHASE_0_5_VALIDATION_REPORT.md)).
 
 ## 1. Файлы на диске
 
@@ -199,3 +199,12 @@ struct ItemPayload {          // -> items.payload
 * Длины всех полей ограничены (title ≤ 512 символов, note ≤ 1 МиБ, вложение ≤ 64 МиБ — уточнить).
 * UUID-строки из IPC парсятся строго; неизвестные поля JSON → ошибка (`#[serde(deny_unknown_fields)]`).
 * SQL — только параметризованные запросы.
+
+## 8. Ревизия 4 (Phase 0.6): изменения формата
+
+| Объект | Изменение | Обоснование |
+|---|---|---|
+| `vault_header` | новый столбец `pw_transform INTEGER NOT NULL` (1 = UTF-8 NFC); входит в канонический заголовок (AAD обёртки DEK); `format_version` = 2 | F-2: правило преобразования пароля должно быть частью формата и аутентифицировано |
+| `.velfort-backup` | `format` = 2; заголовок 77 байт: + `pw_transform` (байт 76), входит в оба AAD | То же для бэкапа |
+
+Существующих файлов формата 1 нет (прототип), миграция не требуется; в Phase 1 формат 1 не поддерживается.

@@ -1,6 +1,6 @@
 # VELFORT — Architecture
 
-Статус: **ревизия 3 (после Phase 0.5, [PHASE_0_5_VALIDATION_REPORT.md](PHASE_0_5_VALIDATION_REPORT.md)), ожидает утверждения**. Связанные документы: [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md),
+Статус: **ревизия 4 (Phase 0.6, [PHASE_0_6_REPORT.md](PHASE_0_6_REPORT.md)); история ревизий сохранена ниже; ревизия 3 — после Phase 0.5; ожидает утверждения**. Связанные документы: [CRYPTOGRAPHY.md](CRYPTOGRAPHY.md),
 [DATA_MODEL.md](DATA_MODEL.md), [THREAT_MODEL.md](THREAT_MODEL.md).
 
 ## 1. Общая схема
@@ -217,3 +217,31 @@ VELFORT/
 | Буфер обмена | [CI]: правило по номеру последовательности ошибочно; `arboard` может оставить секрет без исключения | §6: очистка только по содержимому под `OpenClipboard`; ошибка копирования ⇒ немедленная очистка |
 | Установщик | [CI]: perMachine → Program Files, `Users:(RX)`; удаление сохраняет данные; offline-сборка 285.70 MiB | `downloadBootstrapper` основной; offline — отдельная сборка |
 | Минимальный IPC | таблица W6 в отчёте Phase 0.5 §9 | Нет команды массовой выгрузки; пути — только из нативных диалогов Rust; необратимые операции — нативное подтверждение; лимит частоты `item_reveal_field` |
+
+## 12. Ревизия 4 (Phase 0.6)
+
+### 12.1. Secret Clipboard Writer (D-P1/D-P2)
+
+Узкий модуль (не общий clipboard framework). Прототип: `spikes/win-clipboard` (`writer.rs` — платформенно-независимая
+логика; `win32.rs` — backend).
+
+* Ответственность: (1) поместить один секрет + 3 защитных формата в одной сессии `OpenClipboard(hwnd)`;
+  (2) вернуть Protected / CopiedUnprotected / Failed; (3) очистить по билету, только если владелец и содержимое наши.
+* Владелец — собственное message-only окно (без него `SetClipboardData` не работает — MS Learn).
+* Политика по умолчанию **Strict**: при сбое любого формата текст удаляется до `CloseClipboard`; `AllowUnprotected`
+  — только с явного согласия пользователя; CRITICAL-исход (формат не поставлен и текст не удалён) ведёт к немедленному
+  предупреждению пользователя и плановой очистке.
+* Билет хранит только SHA-256(домен ‖ текст), не секрет.
+* `arboard` в пути записи секретов не используется.
+
+### 12.2. Tauri/WebView2 (D-P4, D-P13)
+
+* `generalAutofillEnabled: false`; при создании webview — явная установка `IsPasswordAutosaveEnabled=false`,
+  `IsGeneralAutofillEnabled=false` (`ICoreWebView2Settings4`) с чтением для проверки.
+* `withGlobalTauri: false`; API — из бандла `@tauri-apps/api`. `__TAURI_INTERNALS__` остаётся (так устроен Tauri);
+  граница безопасности — ACL capabilities + `AppManifest::commands`.
+* CI-проверка конфигурации `ci/check_config.py` с самопроверкой.
+
+### 12.3. Дампы и удаление (D-P10, D-P12)
+
+См. [CRASH_DUMP_POLICY.md](CRASH_DUMP_POLICY.md) и [UNINSTALL_DATA_POLICY.md](UNINSTALL_DATA_POLICY.md).

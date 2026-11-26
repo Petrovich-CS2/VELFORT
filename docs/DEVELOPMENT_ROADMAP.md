@@ -1,6 +1,6 @@
 # VELFORT — Development Roadmap
 
-Статус: **ревизия 2 (после [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md)), ожидает утверждения**. Каждый этап завершается только при выполнении его
+Статус: **ревизия 4 (Phase 0.6); ревизия 2 — после ARCHITECTURE_REVIEW; ожидает утверждения**. Каждый этап завершается только при выполнении его
 критериев готовности (Definition of Done) и прохождении тестов из [SECURITY_REQUIREMENTS.md](SECURITY_REQUIREMENTS.md).
 
 ## Этап 0. Архитектура и документация
@@ -30,6 +30,18 @@ Crashpad; W7 без Runtime / без сети / обновление; W9 UX; с�
 
 **Решения, требующиеся от владельца:** см. отчёт §8 и §10 (NFC-зависимость, `argon2` `parallel`, правило буфера обмена,
 вариант C для v1.x).
+
+## Этап 0.6. Security remediation — **PARTIAL** (2026-11-26)
+
+Отчёт: [PHASE_0_6_REPORT.md](PHASE_0_6_REPORT.md). Выполнено в `spikes/`: NFC (F-2), снижение остатков Argon2 (F-1, MITIGATED),
+Win32 Secret Clipboard Writer (D-P1/D-P2), отключение автозаполнения и `withGlobalTauri` (D-P4/D-P13), политики дампов
+и удаления (D-P10/D-P12, OPEN-решения), Linux CI + Windows CI, план физических проверок
+([PHYSICAL_WINDOWS_11_TEST_PLAN.md](PHYSICAL_WINDOWS_11_TEST_PLAN.md)).
+
+**Не закрыто:** физическая Windows 11 (P-01…P-22); решения владельца по CDP-5 и UNI-4; F-1 — только в пределах
+охвата измерителя.
+
+**Phase 1 — NOT APPROVED** (решение владельца). Production-модули не создаются.
 
 ## Этап 1. Основное хранилище
 

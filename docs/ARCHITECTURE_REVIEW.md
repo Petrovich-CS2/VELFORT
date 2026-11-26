@@ -194,3 +194,25 @@
 | Бэкап без `aead-stream` | Прототип и 22 теста — PASS [CI, LNX]; пик памяти ≈2×/≈3× снимка |
 
 Новые вопросы владельцу — отчёт §10.
+
+## 8. Phase 0.6 (2026-11-26): исправления и аудит `withGlobalTauri` (D-P13)
+
+Полный отчёт: [PHASE_0_6_REPORT.md](PHASE_0_6_REPORT.md); план: [PHASE_0_6_IMPLEMENTATION_PLAN.md](PHASE_0_6_IMPLEMENTATION_PLAN.md).
+
+### 8.1. Аудит D-P13
+
+| Вопрос | Факт | Источник |
+|---|---|---|
+| Что даёт `withGlobalTauri` | Экспорт пространств имён `@tauri-apps/api` в `window.__TAURI__` (Phase 0.5 [WCI]: 12 имён) | Phase 0.5 W6; комментарии в `@tauri-apps/api` 2.12.5 (`core.js:10`) |
+| Нужен ли VELFORT | Нет: frontend будет собираться бандлером и импортировать только `@tauri-apps/api/core` | решение |
+| Что остаётся без него | `window.__TAURI_INTERNALS__` (через него работает `core.invoke`: `core.js:341`); `Object.keys` = `["plugins"]` [WCI] | исходник, [WCI] |
+| Изменилась ли граница безопасности | Нет: вызовы по-прежнему ограничиваются ACL (команды вне `AppManifest`, неизвестные, `plugin:fs` — «not allowed by ACL») [WCI] | [WCI] |
+| Защита от возврата | `ci/check_config.py` (запрещает `withGlobalTauri`, core/plugin-разрешения, capability не для `main`, расхождение с `AppManifest`) + самопроверка 14 мутаций | [LNX, LCI, WCI] |
+
+Итог: `withGlobalTauri` отключён; избыточные пространства имён устранены; набор IPC-возможностей определяется только
+ACL и проверяется в CI.
+
+### 8.2. Противоречия Phase 0.6 (C-1…C-6)
+
+См. план §1.2. Требуют решения владельца: C-2 (отправка дампов WebView2 не отключается через Tauri), C-4
+(встроенное рекурсивное удаление данных в NSIS).

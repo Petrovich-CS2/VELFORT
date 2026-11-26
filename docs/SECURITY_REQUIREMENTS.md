@@ -1,6 +1,6 @@
 # VELFORT — Security Requirements
 
-Статус: **ревизия 3 (после Phase 0.5, [PHASE_0_5_VALIDATION_REPORT.md](PHASE_0_5_VALIDATION_REPORT.md)), ожидает утверждения**. Каждое требование имеет идентификатор, формулировку
+Статус: **ревизия 4 (Phase 0.6, [PHASE_0_6_REPORT.md](PHASE_0_6_REPORT.md)); история ревизий сохранена ниже; ревизия 3 — после Phase 0.5; ожидает утверждения**. Каждое требование имеет идентификатор, формулировку
 и способ проверки. Функция не считается завершённой, пока её требования не покрыты тестами (ТЗ §10.10).
 
 Обозначения: **MUST** — обязательно для релиза; **SHOULD** — обязательно, если нет задокументированной причины;
@@ -129,3 +129,23 @@
 | SR-TEST-9 | **Блокировка**: SR-LOCK-1…7 |
 | SR-TEST-10 | **Nonce**: property-тест уникальности (10^6 вызовов), отказ RNG, отсутствие API с внешним nonce |
 | SR-TEST-11 | **Windows-проверки** W1–W13: результаты Windows CI (Windows Server 2025) фиксируются отдельно и **не** считаются подтверждением на физической Windows 11; Linux-результаты не переносятся на Windows |
+
+## 10. Требования Phase 0.6 (ревизия 4)
+
+Статусы: **PASS** — тест выполнен и прошёл в указанной среде; **MITIGATED** — риск снижен, измерено, но не устранён
+полностью; **POLICY** — политика определена, реализация в Phase 1; **OPEN** — требует решения владельца.
+Окружения: [LNX] Linux-контейнер, [LCI] Linux CI (ubuntu-latest), [WCI] Windows CI (Windows Server 2025), [WIN11] — не выполнялось.
+
+| ID | Требование | Обоснование | Проверка | Статус | Ограничения |
+|---|---|---|---|---|---|
+| SR-KDF-8 | MUST: Master Password нормализуется **единственной** функцией `normalize_password` (NFC, `unicode-normalization` 0.1.26) во всех точках KDF (создание, разблокировка, смена пароля, бэкап, восстановление); `pw_transform = 1` хранится в заголовках хранилища и бэкапа и входит в аутентифицированный заголовок; неизвестное значение — отказ; NFKC не применяется | F-2; «й» NFC `d0b9` ≠ NFD `d0b8cc86` | `vault-crypto-proto/tests/nfc.rs` (16 тестов), мутационная проверка (7 падают без нормализации) | PASS [LNX, LCI, WCI] (в спайке) | Строки с неназначенными в Unicode 18.0 кодовыми точками могут нормализоваться иначе в будущих версиях (UAX #15 §3) |
+| SR-KDF-9 | MUST: Argon2id — только через `hash_password_into_with_memory` с буфером, выделенным `try_reserve_exact`, затираемым на всех путях (`WipeOnDrop`), и `scrub_stack()` сразу после KDF; регрессионный измеритель остатков с позитивным контролем — в CI | F-1 | `spikes/argon2-memory` (5 unit-тестов + измеритель) | MITIGATED: 0 остатков блоков и tag [LNX, WCI] | Измеряются только итоговые блоки и tag; см. SECURE_MEMORY_ANALYSIS §6 |
+| SR-CLIP-5 | MUST: секрет и три защитных формата (`ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory`=0, `CanUploadToCloudClipboard`=0) ставятся в **одной** сессии `OpenClipboard`; при сбое любого формата (политика Strict по умолчанию) текст удаляется **до** `CloseClipboard`; результат — ровно один из: Protected / CopiedUnprotected(список) / Failed | D-P2 | `win-clipboard`: 14 тестов логики [LNX, LCI, WCI]; Win32-проверки [WCI] | PASS [WCI] | Защитные форматы — запрос к Windows; соблюдение историей/облаком не проверено (история на раннере отключена) |
+| SR-CLIP-6 | MUST: очистка только если владелец буфера — окно VELFORT **и** текущий текст совпадает с хэшем секрета (проверка и `EmptyClipboard` под одной блокировкой); номер последовательности не используется как критерий | D-P1 | тесты логики + Win32: `v2_no_clear_of_foreign_content`, гонка 300 итераций | PASS [WCI] (0 ошибочных очисток) | Если другая программа скопировала **тот же** текст — не очищаем (её содержимое) |
+| SR-CLIP-7 | MUST: ограниченное число попыток `OpenClipboard` (10 × 15 мс по умолчанию); при неудаче — `Busy` и сообщение пользователю; бесконечных повторов нет | Требование владельца | `busy_clipboard_is_bounded…`, `v2_busy_bounded_failure` (ERROR_ACCESS_DENIED, 76 мс) | PASS [LNX, WCI] | Очистка может остаться невыполненной — пользователь должен быть предупреждён |
+| SR-CLIP-8 | MUST: собственное message-only окно-владелец; `GlobalAlloc(GMEM_MOVEABLE)`; `GlobalFree` при неудаче `SetClipboardData`; учёт выделений | Контракты MS Learn | `v2_global_memory_accounting`, `v2_set_text_failure`, `v2_strict_protection_failure_*` | PASS [WCI] | После передачи системе память текста не может быть затёрта приложением |
+| SR-UI-7 | MUST: `generalAutofillEnabled: false` в конфигурации окна; дополнительно явная установка `IsPasswordAutosaveEnabled=false` и `IsGeneralAutofillEnabled=false` через `ICoreWebView2Settings4` с проверкой чтением | D-P4 | спайк `tauri-shell`: значения до/после явной установки | PASS [WCI] (false/false до и после) | В UDF создаются `Login Data`/`Web Data` (Chromium); сигнальных строк в них нет [WCI] |
+| SR-UI-8 | MUST: проверка конфигурации (`ci/check_config.py`) в CI: `withGlobalTauri` false, autofill false, CSP без unsafe/удалённых источников, isolation, одна capability только для `main`, только `allow-*` команд из `AppManifest`, без плагинов, perMachine | D-P13, SR-UI-1/3/5/6 | скрипт + самопроверка на 14 мутациях | PASS [LNX, LCI, WCI] | Проверяет конфигурацию, не поведение |
+| SR-UI-9 | MUST: `withGlobalTauri: false`; фронтенд использует `@tauri-apps/api` из бандла. Граница безопасности — ACL (не наличие глобального объекта): `__TAURI_INTERNALS__` присутствует всегда | D-P13; `@tauri-apps/api` 2.12.5 `core.js:341` | JS: `global_tauri_namespace_present=false`; ACL-отказы | PASS [WCI] | Отключение не уменьшает набор доступных команд |
+| SR-CDP-1..6 | см. [CRASH_DUMP_POLICY.md](CRASH_DUMP_POLICY.md) | D-P10 | [WCI] эксперимент со сбоем renderer | POLICY; **OPEN** (CDP-5: отключение отправки недоступно через Tauri) | Дампы могут отправляться в Microsoft |
+| SR-UNI-1..6 | см. [UNINSTALL_DATA_POLICY.md](UNINSTALL_DATA_POLICY.md) | D-P12 | [WCI] тихое удаление | POLICY; **OPEN** (UNI-4) | Путь с флажком не проверен |
