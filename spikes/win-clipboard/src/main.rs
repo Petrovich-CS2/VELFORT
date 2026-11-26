@@ -180,6 +180,10 @@ mod imp {
     }
 
     pub fn run(exe: &str) {
+        // WinRT Clipboard is a single-threaded (STA) class: initialise this thread as STA.
+        // SAFETY: called once on the main thread before any WinRT use.
+        let sta = unsafe { windows::Win32::System::WinRT::RoInitialize(windows::Win32::System::WinRT::RO_INIT_SINGLETHREADED) };
+        info("winrt_sta_init", format!("{sta:?}"));
         let mut cb = match Clipboard::new() {
             Ok(c) => c,
             Err(e) => {

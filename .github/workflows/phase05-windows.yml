@@ -132,6 +132,17 @@ jobs:
           "== %TEMP%"; icacls $env:TEMP
           "== C:\Program Files"; icacls "C:\Program Files"
 
+      - name: Environment summary (repeated at end of log)
+        if: always()
+        run: |
+          $os = Get-CimInstance Win32_OperatingSystem
+          "OS: $($os.Caption) version=$($os.Version) build=$($os.BuildNumber)"
+          Get-CimInstance Win32_Processor | ForEach-Object { "CPU: $($_.Name) cores=$($_.NumberOfCores) logical=$($_.NumberOfLogicalProcessors)" }
+          "RAM GiB: {0:N1}" -f ((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB)
+          $k='HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          if (Test-Path $k) { "WebView2 Runtime pv: $((Get-ItemProperty $k).pv)" } else { "WebView2 Runtime: registry key not found" }
+          rustc -V
+
   tauri-shell:
     runs-on: windows-latest
     timeout-minutes: 75

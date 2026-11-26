@@ -78,6 +78,7 @@ mod imp {
             }
             let pc = SendMessageW(edit, 210 /* EM_GETPASSWORDCHAR */, 0, 0);
             println!("CHECK native_password_char: INFO EM_GETPASSWORDCHAR={pc} (non-zero => masked display)");
+            println!("CHECK native_scan_baseline: INFO the UTF-8 canary literal is compiled into this binary (.rdata) => expect utf8_occurrences >= 1 at all stages; the UTF-16 count is the meaningful one");
 
             // 2. Other process of the same user tries to read the control.
             let r = run_child_pumping(&["reader".into(), format!("{}", edit as usize)]);
@@ -89,7 +90,8 @@ mod imp {
             // 4. Read once into our own buffer, then clear the control and our buffer.
             let mut buf = vec![0u16; 256];
             let n = GetWindowTextW(edit, buf.as_mut_ptr(), 256) as usize;
-            let got = String::from_utf16_lossy(&buf[..n]) == CANARY;
+            // Compare without allocating a second (UTF-8 or UTF-16) copy of the secret.
+            let got = buf[..n].iter().copied().eq(CANARY.encode_utf16());
             println!("CHECK native_owner_reads_value: {} len={n}", if got { "PASS" } else { "FAIL" });
             // Overwrite with same-length filler first (attempt to reuse the control's buffer), then empty.
             let filler: Vec<u16> = std::iter::repeat_n('x' as u16, n).chain(Some(0)).collect();
