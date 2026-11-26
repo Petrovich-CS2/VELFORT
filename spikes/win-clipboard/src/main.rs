@@ -66,6 +66,24 @@ mod imp {
         seq()
     }
 
+    /// Like `copy_secret`, but reports arboard errors instead of panicking (race test).
+    fn try_copy_secret(cb: &mut Clipboard, text: &str) -> Result<u32, String> {
+        cb.set().exclude_from_monitoring().text(text.to_owned()).map(|_| seq()).map_err(|e| e.to_string())
+    }
+
+    /// After a failed exclusive set: is our secret on the clipboard, and is the exclusion format present?
+    fn state_after_failure(text: &str) -> (bool, bool) {
+        if !open_retry() {
+            return (false, false);
+        }
+        // SAFETY: clipboard open.
+        let ours = unsafe { text_under_lock() }.as_deref() == Some(text);
+        // SAFETY: clipboard is open.
+        unsafe { CloseClipboard() };
+        let excluded = registered_format_names().iter().any(|n| n == "ExcludeClipboardContentFromMonitorProcessing");
+        (ours, excluded)
+    }
+
     /// Reads CF_UNICODETEXT while the clipboard is already open.
     unsafe fn text_under_lock() -> Option<String> {
         use windows_sys::Win32::System::DataExchange::GetClipboardData;
@@ -193,8 +211,23 @@ mod imp {
         // 4. Race: a child spams the clipboard while we copy+clear repeatedly.
         let mut child = Command::new(exe).args(["child-spam", "300"]).spawn().expect("spawn");
         let (mut cleared, mut skipped, mut busy, mut v1_bad) = (0, 0, 0, 0);
+        let (mut set_err, mut err_secret_unprotected, mut err_secret_absent) = (0, 0, 0);
         for _ in 0..300 {
-            let s = copy_secret(&mut cb, CANARY);
+            let s = match try_copy_secret(&mut cb, CANARY) {
+                Ok(s) => s,
+                Err(_) => {
+                    set_err += 1;
+                    let (ours, excluded) = state_after_failure(CANARY);
+                    if ours && !excluded {
+                        err_secret_unprotected += 1;
+                    } else if !ours {
+                        err_secret_absent += 1;
+                    }
+                    // Policy under test: on any set error, immediately try to remove our value.
+                    let _ = safe_clear(seq(), CANARY);
+                    continue;
+                }
+            };
             let o = safe_clear(s, CANARY);
             if o.v1_would_erase_foreign {
                 v1_bad += 1;
@@ -207,6 +240,7 @@ mod imp {
         }
         let _ = child.wait();
         info("race_counts", format!("v2: cleared={cleared} skipped_foreign={skipped} busy={busy}"));
+        info("race_arboard_set_errors", format!("{set_err} of 300; after error: secret on clipboard WITHOUT exclusion format = {err_secret_unprotected}, secret absent = {err_secret_absent}"));
         info("race_v1_sequence_rule_would_have_erased_foreign_content", format!("{v1_bad} times out of 300"));
 
         // 5. Clipboard history: control (plain) item vs excluded secret.

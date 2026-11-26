@@ -46,36 +46,40 @@ jobs:
         run: cargo test --release --locked -p vault-crypto-proto -p aead-stream-audit
 
       - name: "W1 Argon2id benchmark (sequential lanes, default features)"
+        continue-on-error: true
         run: |
           cargo build --release --locked -p argon2-bench
-          .\target\release\argon2-bench.exe 5 0 | Select-Object -First 6
-          foreach ($i in 0..6) { .\target\release\argon2-bench.exe 5 $i | Select-Object -Last 1 }
+          foreach ($i in 0..6) { $o = .\target\release\argon2-bench.exe 5 $i; if ($i -eq 0) { $o } else { $o[-1] } }
           "under 4 busy threads:"
           foreach ($i in 0,2) { .\target\release\argon2-bench.exe 5 $i 4 | Select-Object -Last 1 }
           "own-buffer (zeroized) path:"
           .\target\release\argon2-bench.exe 5 2 0 own-buffer | Select-Object -Last 1
 
       - name: "W1 Argon2id benchmark (parallel feature / rayon)"
+        continue-on-error: true
         run: |
           cargo build --release --locked -p argon2-bench --features parallel
-          .\target\release\argon2-bench.exe 5 0 | Select-Object -First 4
-          foreach ($i in 0..6) { .\target\release\argon2-bench.exe 5 $i | Select-Object -Last 1 }
+          foreach ($i in 0..6) { $o = .\target\release\argon2-bench.exe 5 $i; if ($i -eq 0) { $o } else { $o[-1] } }
           "under 4 busy threads:"
           foreach ($i in 0,2) { .\target\release\argon2-bench.exe 5 $i 4 | Select-Object -Last 1 }
 
       - name: "W2 VirtualLock / CryptProtectMemory"
+        continue-on-error: true
         run: .\target\release\win-memory.exe
 
       - name: "W3 Clipboard (history enabled via HKCU for this session)"
+        continue-on-error: true
         run: |
           New-Item -Path 'HKCU:\Software\Microsoft\Clipboard' -Force | Out-Null
           Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Clipboard' -Name EnableClipboardHistory -Value 1 -Type DWord
           .\target\release\win-clipboard.exe run
 
       - name: "W9 Native password prompt prototype"
+        continue-on-error: true
         run: .\target\release\win-native-prompt.exe run
 
       - name: "Small NTFS volume for disk-full tests (diskpart VHDX)"
+        continue-on-error: true
         run: |
           $vhd = Join-Path $env:RUNNER_TEMP 'small.vhdx'
           @"
@@ -90,10 +94,12 @@ jobs:
           Get-PSDrive V | Format-List Name,Used,Free
 
       - name: "W8 SQLite crash recovery (journal_mode=DELETE)"
+        continue-on-error: true
         run: |
           .\target\release\sqlite-crash.exe run "$env:RUNNER_TEMP\sqlite-work" "V:\"
 
       - name: "W10/W13 Backup prototype: size/memory, crash, disk full"
+        continue-on-error: true
         run: |
           $B = ".\target\release\backup-bench.exe"
           foreach ($m in 1,16,64,256) {
@@ -113,6 +119,7 @@ jobs:
           Get-ChildItem V:\ -Force | Format-Table Name,Length
 
       - name: "W12 Default ACLs of candidate data locations"
+        continue-on-error: true
         run: |
           $docs = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'VELFORT-spike'
           New-Item -ItemType Directory -Force $docs | Out-Null
@@ -147,12 +154,14 @@ jobs:
         run: cargo build --release --locked -p win-memory --bin scan-dir
 
       - name: "W6/W7 Build spike app + NSIS installer (perMachine, downloadBootstrapper)"
+        continue-on-error: true
         working-directory: spikes/tauri-shell
         run: |
           npx --yes @tauri-apps/cli@2.12.6 build
           Get-ChildItem -Recurse src-tauri\target\release\bundle | Where-Object { -not $_.PSIsContainer } | Format-Table FullName,Length
 
       - name: "W5/W6 Run spike app (automated JS scenario)"
+        continue-on-error: true
         working-directory: spikes/tauri-shell
         run: |
           $env:VELFORT_SPIKE_REPORT = Join-Path $env:RUNNER_TEMP 'spike-report.json'
@@ -163,6 +172,7 @@ jobs:
           if (Test-Path $env:VELFORT_SPIKE_REPORT) { Get-Content $env:VELFORT_SPIKE_REPORT } else { "NO REPORT WRITTEN" }
 
       - name: "W5 Scan WebView2 user data folder for canaries"
+        continue-on-error: true
         run: |
           $r = Get-Content (Join-Path $env:RUNNER_TEMP 'spike-report.json') | ConvertFrom-Json
           $udf = $r.app_local_data_dir
@@ -172,6 +182,7 @@ jobs:
           "== ACL of app_local_data_dir"; icacls $udf
 
       - name: "W7 Install (perMachine) / ACL / run / uninstall / data retention"
+        continue-on-error: true
         working-directory: spikes/tauri-shell
         run: |
           $setup = Get-ChildItem src-tauri\target\release\bundle\nsis\*-setup.exe | Select-Object -First 1
@@ -188,6 +199,7 @@ jobs:
           "user data dir exists after uninstall: $(Test-Path $udf)"
 
       - name: "W7 Variant: currentUser install mode"
+        continue-on-error: true
         working-directory: spikes/tauri-shell
         run: |
           npx --yes @tauri-apps/cli@2.12.6 build --config ci/currentuser.json
@@ -198,6 +210,7 @@ jobs:
           if (Test-Path $dir) { icacls $dir; $un = Join-Path $dir 'uninstall.exe'; if (Test-Path $un) { Start-Process $un -ArgumentList '/S' -Wait } }
 
       - name: "W7 Variant: offlineInstaller WebView2 mode (size only)"
+        continue-on-error: true
         working-directory: spikes/tauri-shell
         run: |
           npx --yes @tauri-apps/cli@2.12.6 build --config ci/offline.json
