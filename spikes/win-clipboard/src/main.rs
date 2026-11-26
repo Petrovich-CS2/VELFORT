@@ -1,23 +1,29 @@
-//! W3 — Windows clipboard behaviour for copied secrets (spike, Windows only).
-//! Usage: win-clipboard run | win-clipboard child-write <text> | win-clipboard child-spam <n>
-//! Prints `CHECK <name>: PASS|FAIL|INFO <detail>`.
+//! win-clipboard spike binary.
+//!   run              — Phase 0.6 secret writer checks on the real Windows clipboard
+//!   legacy-arboard   — Phase 0.5 arboard research run (kept for comparison)
+//!   child-write <t>  — another process writes text (via arboard, as an "other application")
+//!   child-spam <n>   — another process writes n times quickly
+//!   child-hold <ms>  — another process keeps the clipboard open for <ms>
+//! Output: `CHECK <name>: PASS|FAIL|INFO <detail>`.
 
 #[cfg(not(windows))]
 fn main() {
-    println!("CHECK platform: INFO win-clipboard runs only on Windows");
+    println!("CHECK platform: INFO win-clipboard Win32 checks run only on Windows; writer logic is tested by `cargo test` on any OS");
 }
 
 #[cfg(windows)]
-mod imp {
-    use arboard::{Clipboard, SetExtWindows};
+#[allow(unsafe_code)]
+mod legacy;
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod v2 {
     use std::process::Command;
     use std::time::Duration;
-    use windows_sys::Win32::System::DataExchange::{
-        CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardFormatNameW, GetClipboardSequenceNumber, OpenClipboard,
-    };
+    use win_clipboard::win32::Win32Backend;
+    use win_clipboard::writer::{ALL_FORMATS, Backend, ClearOutcome, CopyError, CopyOutcome, Policy, ProtectFormat, Writer};
 
-    pub const CANARY: &str = "VELFORT-CANARY-CLIPBOARD-SECRET-5e1f";
-    pub const CANARY_PLAIN: &str = "VELFORT-CANARY-CLIPBOARD-PLAIN-9d0c";
+    const CANARY: &str = "VELFORT-CANARY-CLIPBOARD-V2-7b3e";
 
     fn report(name: &str, ok: bool, d: impl AsRef<str>) {
         println!("CHECK {name}: {} {}", if ok { "PASS" } else { "FAIL" }, d.as_ref());
@@ -25,248 +31,148 @@ mod imp {
     fn info(name: &str, d: impl AsRef<str>) {
         println!("CHECK {name}: INFO {}", d.as_ref());
     }
+    fn w(s: &str) -> Vec<u16> {
+        s.encode_utf16().collect()
+    }
+    fn writer() -> Writer<Win32Backend> {
+        Writer::new(Win32Backend::new().expect("message-only window"))
+    }
 
-    fn open_retry() -> bool {
-        for _ in 0..50 {
-            // SAFETY: NULL owner is allowed for reading/emptying.
-            if unsafe { OpenClipboard(core::ptr::null_mut()) } != 0 {
-                return true;
+    /// Opens with our window and inspects: (our text present?, owner is us?, DWORD per format).
+    fn inspect(wr: &mut Writer<Win32Backend>) -> Option<(bool, bool, Vec<Option<u32>>)> {
+        for _ in 0..20 {
+            if wr.backend.open().is_ok() {
+                let text = wr.backend.read_text().ok().flatten().map(|t| t.as_slice() == w(CANARY).as_slice()).unwrap_or(false);
+                let owner = wr.backend.is_owner();
+                let f = ALL_FORMATS.iter().map(|f| wr.backend.read_format_dword(*f)).collect();
+                wr.backend.close();
+                return Some((text, owner, f));
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        false
+        None
     }
 
-    fn registered_format_names() -> Vec<String> {
-        let mut names = Vec::new();
-        if !open_retry() {
-            return names;
-        }
-        // SAFETY: clipboard is open; buffer sized.
-        unsafe {
-            let mut f = EnumClipboardFormats(0);
-            while f != 0 {
-                let mut buf = [0u16; 256];
-                let n = GetClipboardFormatNameW(f, buf.as_mut_ptr(), 256);
-                names.push(if n > 0 { String::from_utf16_lossy(&buf[..n as usize]) } else { format!("#{f}") });
-                f = EnumClipboardFormats(f);
-            }
-            CloseClipboard();
-        }
-        names
-    }
-
-    fn seq() -> u32 {
-        // SAFETY: no preconditions.
-        unsafe { GetClipboardSequenceNumber() }
-    }
-
-    fn copy_secret(cb: &mut Clipboard, text: &str) -> u32 {
-        cb.set().exclude_from_monitoring().text(text.to_owned()).expect("set");
-        seq()
-    }
-
-    /// Like `copy_secret`, but reports arboard errors instead of panicking (race test).
-    fn try_copy_secret(cb: &mut Clipboard, text: &str) -> Result<u32, String> {
-        cb.set().exclude_from_monitoring().text(text.to_owned()).map(|_| seq()).map_err(|e| e.to_string())
-    }
-
-    /// After a failed exclusive set: is our secret on the clipboard, and is the exclusion format present?
-    fn state_after_failure(text: &str) -> (bool, bool) {
-        if !open_retry() {
-            return (false, false);
-        }
-        // SAFETY: clipboard open.
-        let ours = unsafe { text_under_lock() }.as_deref() == Some(text);
-        // SAFETY: clipboard is open.
-        unsafe { CloseClipboard() };
-        let excluded = registered_format_names().iter().any(|n| n == "ExcludeClipboardContentFromMonitorProcessing");
-        (ours, excluded)
-    }
-
-    /// Reads CF_UNICODETEXT while the clipboard is already open.
-    unsafe fn text_under_lock() -> Option<String> {
-        use windows_sys::Win32::System::DataExchange::GetClipboardData;
-        use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
-        const CF_UNICODETEXT: u32 = 13;
-        // SAFETY: caller holds the clipboard open; handle is locked/unlocked in pairs.
-        unsafe {
-            let h = GetClipboardData(CF_UNICODETEXT);
-            if h.is_null() {
-                return None;
-            }
-            let p = GlobalLock(h as _) as *const u16;
-            if p.is_null() {
-                return None;
-            }
-            let mut n = 0usize;
-            while *p.add(n) != 0 {
-                n += 1;
-            }
-            let t = String::from_utf16_lossy(core::slice::from_raw_parts(p, n));
-            GlobalUnlock(h as _);
-            Some(t)
-        }
-    }
-
-    /// Result of one clear attempt.
-    /// v1 = "clear if sequence number unchanged since our copy" (racy, see W3 report);
-    /// v2 = "clear only if the CURRENT content (read while the clipboard is open) is our secret".
-    /// Only v2 is applied. OpenClipboard "prevents other applications from modifying the clipboard
-    /// content" until CloseClipboard, so the v2 check and EmptyClipboard are not interleaved.
-    pub struct ClearOutcome {
-        pub applied: &'static str,
-        pub v1_would_erase_foreign: bool,
-    }
-
-    pub fn safe_clear(our_seq: u32, secret: &str) -> ClearOutcome {
-        if !open_retry() {
-            return ClearOutcome { applied: "busy", v1_would_erase_foreign: false };
-        }
-        // SAFETY: clipboard is open for the duration.
-        unsafe {
-            let seq_same = GetClipboardSequenceNumber() == our_seq;
-            let current = text_under_lock();
-            let ours = current.as_deref() == Some(secret);
-            let applied = if !ours {
-                "changed-by-other"
-            } else if EmptyClipboard() != 0 {
-                "cleared"
-            } else {
-                "empty-failed"
-            };
-            CloseClipboard();
-            ClearOutcome { applied, v1_would_erase_foreign: seq_same && !ours }
-        }
-    }
-
-    fn history_probe(label: &str) {
-        use windows::ApplicationModel::DataTransfer::Clipboard as WinRtClipboard;
-        match WinRtClipboard::IsHistoryEnabled() {
-            Ok(enabled) => info(&format!("{label}_history_enabled"), format!("{enabled}")),
-            Err(e) => info(&format!("{label}_history_enabled"), format!("error {e}")),
-        }
-        match WinRtClipboard::IsRoamingEnabled() {
-            Ok(r) => info(&format!("{label}_roaming_enabled"), format!("{r}")),
-            Err(e) => info(&format!("{label}_roaming_enabled"), format!("error {e}")),
-        }
-        let res = WinRtClipboard::GetHistoryItemsAsync().and_then(|op| op.join());
-        match res {
-            Ok(r) => {
-                let status = r.Status().map(|s| s.0).unwrap_or(-1);
-                let mut texts = Vec::new();
-                if let Ok(items) = r.Items() {
-                    let n = items.Size().unwrap_or(0);
-                    for i in 0..n {
-                        if let Ok(it) = items.GetAt(i)
-                            && let Ok(t) = it.Content().and_then(|c| c.GetTextAsync()).and_then(|op| op.join())
-                        {
-                            texts.push(t.to_string());
-                        }
-                    }
-                }
-                let has_secret = texts.iter().any(|t| t.contains(CANARY));
-                let has_plain = texts.iter().any(|t| t.contains(CANARY_PLAIN));
-                info(
-                    &format!("{label}_history_items"),
-                    format!("status={status} (0=Success,1=AccessDenied,2=ClipboardHistoryDisabled) items={} contains_excluded_secret={has_secret} contains_plain_control={has_plain}", texts.len()),
-                );
-                if has_plain {
-                    report(&format!("{label}_excluded_secret_absent_from_history"), !has_secret, "control item present, so history works");
-                }
-            }
-            Err(e) => info(&format!("{label}_history_items"), format!("error {e}")),
-        }
+    fn other_text() -> Option<String> {
+        let mut cb = arboard::Clipboard::new().ok()?;
+        cb.get_text().ok()
     }
 
     pub fn run(exe: &str) {
-        // WinRT Clipboard is a single-threaded (STA) class: initialise this thread as STA.
-        // SAFETY: called once on the main thread before any WinRT use.
-        let sta = unsafe { windows::Win32::System::WinRT::RoInitialize(windows::Win32::System::WinRT::RO_INIT_SINGLETHREADED) };
-        info("winrt_sta_init", format!("{sta:?}"));
-        let mut cb = match Clipboard::new() {
-            Ok(c) => c,
-            Err(e) => {
-                info("clipboard_open", format!("FAILED to open clipboard: {e}"));
-                return;
+        // 1. Success: text + three protective formats, one session.
+        let mut wr = writer();
+        let (o, t) = wr.copy_secret(&w(CANARY), Policy::Strict);
+        let st = wr.backend.stats;
+        report("v2_copy_protected", o == CopyOutcome::Protected, format!("{o:?}"));
+        match inspect(&mut wr) {
+            Some((text, owner, f)) => {
+                report("v2_text_present_and_owner", text && owner, format!("text={text} owner={owner}"));
+                report("v2_formats_dword_zero", f.iter().all(|x| *x == Some(0)), format!("{:?} for {:?}", f, ALL_FORMATS));
             }
-        };
+            None => info("v2_inspect", "clipboard unavailable"),
+        }
+        report("v2_global_memory_accounting", st.allocated == 4 && st.transferred_to_system == 4 && st.freed_after_failure == 0, format!("{st:?}"));
 
-        // 1. Exclusion formats present after arboard set().exclude_from_monitoring().
-        let s = copy_secret(&mut cb, CANARY);
-        let names = registered_format_names();
-        report("exclusion_format_present", names.iter().any(|n| n == "ExcludeClipboardContentFromMonitorProcessing"), format!("formats={names:?}"));
-        report("secret_readable_by_other_code_while_present", cb.get_text().map(|t| t == CANARY).unwrap_or(false), "any process of the user can read it while it is on the clipboard (expected)");
+        // 2. Clear our own value.
+        let c = wr.clear_if_ours(t.as_ref().unwrap());
+        let after = inspect(&mut wr).map(|x| x.0);
+        report("v2_clear_ours", c == ClearOutcome::Cleared && after == Some(false), format!("{c:?} text_after={after:?}"));
 
-        // 2. Normal timed clear.
-        std::thread::sleep(Duration::from_millis(500));
-        let r = safe_clear(s, CANARY).applied;
-        let after = cb.get_text().unwrap_or_default();
-        report("timed_clear_removes_our_value", r == "cleared" && after != CANARY, format!("result={r} after_len={}", after.len()));
+        // 3. Another application overwrote the clipboard: must NOT clear.
+        let (_, t) = wr.copy_secret(&w(CANARY), Policy::Strict);
+        let s = Command::new(exe).args(["child-write", "USER-COPIED-TEXT-V2"]).status();
+        info("v2_child_write_status", format!("{s:?}"));
+        let c = wr.clear_if_ours(t.as_ref().unwrap());
+        let other = other_text();
+        report("v2_no_clear_of_foreign_content", c == ClearOutcome::NotOurs && other.as_deref() == Some("USER-COPIED-TEXT-V2"), format!("{c:?} clipboard={other:?}"));
 
-        // 3. Another process overwrote the clipboard -> we must NOT clear the user's content.
-        let s = copy_secret(&mut cb, CANARY);
-        let st = Command::new(exe).args(["child-write", "USER-COPIED-TEXT"]).status();
-        info("child_write_status", format!("{st:?}"));
-        let r = safe_clear(s, CANARY).applied;
-        let after = cb.get_text().unwrap_or_default();
-        report("no_clear_after_foreign_change", r == "changed-by-other" && after == "USER-COPIED-TEXT", format!("result={r} clipboard={after}"));
+        // 4. Clipboard held open by another process: bounded attempts, failure, nothing placed.
+        let mut child = Command::new(exe).args(["child-hold", "1500"]).spawn().expect("spawn");
+        std::thread::sleep(Duration::from_millis(400));
+        let mut wb = writer();
+        wb.max_open_attempts = 5;
+        let t0 = std::time::Instant::now();
+        let (o, t) = wb.copy_secret(&w(CANARY), Policy::Strict);
+        let ms = t0.elapsed().as_millis();
+        let le = wb.backend.last_error();
+        let _ = child.wait();
+        report("v2_busy_bounded_failure", o == CopyOutcome::Failed(CopyError::Busy) && t.is_none(), format!("{o:?} after {ms} ms, GetLastError={le} (5=ERROR_ACCESS_DENIED)"));
+        report("v2_busy_secret_not_placed", other_text().as_deref() != Some(CANARY), "");
 
-        // 4. Race: a child spams the clipboard while we copy+clear repeatedly.
+        // 5. Each protective format failing (real API error via invalid format id): Strict removes text.
+        for f in ALL_FORMATS {
+            let mut wf = writer();
+            wf.backend.inject_fail_format = Some(f);
+            let (o, t) = wf.copy_secret(&w(CANARY), Policy::Strict);
+            let st = wf.backend.stats;
+            let present = inspect(&mut wf).map(|x| x.0);
+            report(
+                &format!("v2_strict_protection_failure_{f:?}"),
+                o == CopyOutcome::Failed(CopyError::ProtectionFailed(vec![f])) && t.is_none() && present == Some(false) && st.freed_after_failure == 1,
+                format!("{o:?} text_present_after={present:?} {st:?}"),
+            );
+        }
+
+        // 6. Text placement failing: nothing placed, memory freed by us.
+        let mut wt = writer();
+        wt.backend.inject_fail_text = true;
+        let (o, _) = wt.copy_secret(&w(CANARY), Policy::Strict);
+        let st = wt.backend.stats;
+        report("v2_set_text_failure", o == CopyOutcome::Failed(CopyError::SetText) && st.freed_after_failure == 1 && st.transferred_to_system == 0, format!("{o:?} {st:?}"));
+
+        // 7. AllowUnprotected: never claims protection; missing format really absent.
+        let mut wu = writer();
+        wu.backend.inject_fail_format = Some(ProtectFormat::NoCloud);
+        let (o, t) = wu.copy_secret(&w(CANARY), Policy::AllowUnprotected);
+        let ins = inspect(&mut wu);
+        report(
+            "v2_allow_unprotected_reports_missing",
+            o == CopyOutcome::CopiedUnprotected(vec![ProtectFormat::NoCloud]) && ins.as_ref().is_some_and(|x| x.0 && x.2[2].is_none() && x.2[0] == Some(0)),
+            format!("{o:?} inspect={ins:?}"),
+        );
+        if let Some(t) = t {
+            let _ = wu.clear_if_ours(&t);
+        }
+
+        // 8. Race with a spamming process.
         let mut child = Command::new(exe).args(["child-spam", "300"]).spawn().expect("spawn");
-        let (mut cleared, mut skipped, mut busy, mut v1_bad) = (0, 0, 0, 0);
-        let (mut set_err, mut err_secret_unprotected, mut err_secret_absent) = (0, 0, 0);
+        let mut wr = writer();
+        let (mut prot, mut busy, mut other_fail, mut cleared, mut not_ours, mut clear_busy, mut unprotected_seen) = (0, 0, 0, 0, 0, 0, 0);
         for _ in 0..300 {
-            let s = match try_copy_secret(&mut cb, CANARY) {
-                Ok(s) => s,
-                Err(_) => {
-                    set_err += 1;
-                    let (ours, excluded) = state_after_failure(CANARY);
-                    if ours && !excluded {
-                        err_secret_unprotected += 1;
-                    } else if !ours {
-                        err_secret_absent += 1;
-                    }
-                    // Policy under test: on any set error, immediately try to remove our value.
-                    let _ = safe_clear(seq(), CANARY);
-                    continue;
-                }
-            };
-            let o = safe_clear(s, CANARY);
-            if o.v1_would_erase_foreign {
-                v1_bad += 1;
+            let (o, t) = wr.copy_secret(&w(CANARY), Policy::Strict);
+            match &o {
+                CopyOutcome::Protected => prot += 1,
+                CopyOutcome::Failed(CopyError::Busy) => busy += 1,
+                _ => other_fail += 1,
             }
-            match o.applied {
-                "cleared" => cleared += 1,
-                "changed-by-other" => skipped += 1,
-                _ => busy += 1,
+            // D-P2 check: whenever our text is on the clipboard and we own it, all formats must be there.
+            if let Some((text, owner, f)) = inspect(&mut wr)
+                && text
+                && owner
+                && f.iter().any(|x| x.is_none())
+            {
+                unprotected_seen += 1;
+            }
+            if let Some(t) = t {
+                match wr.clear_if_ours(&t) {
+                    ClearOutcome::Cleared => cleared += 1,
+                    ClearOutcome::NotOurs => not_ours += 1,
+                    _ => clear_busy += 1,
+                }
             }
         }
         let _ = child.wait();
-        info("race_counts", format!("v2: cleared={cleared} skipped_foreign={skipped} busy={busy}"));
-        info("race_arboard_set_errors", format!("{set_err} of 300; after error: secret on clipboard WITHOUT exclusion format = {err_secret_unprotected}, secret absent = {err_secret_absent}"));
-        info("race_v1_sequence_rule_would_have_erased_foreign_content", format!("{v1_bad} times out of 300"));
-
-        // 5. Clipboard history: control (plain) item vs excluded secret.
-        cb.set().text(CANARY_PLAIN.to_owned()).expect("plain");
-        std::thread::sleep(Duration::from_millis(1500));
-        let _s = copy_secret(&mut cb, CANARY);
-        std::thread::sleep(Duration::from_millis(1500));
-        history_probe("history");
-        let _ = safe_clear(seq(), CANARY);
+        info("v2_race_counts", format!("copy: protected={prot} busy={busy} other_fail={other_fail}; clear: cleared={cleared} not_ours={not_ours} busy={clear_busy}"));
+        report("v2_race_no_unprotected_secret_observed", unprotected_seen == 0, format!("our text without all protective formats observed {unprotected_seen} times"));
     }
 
-    pub fn child_write(text: &str) {
-        let mut cb = Clipboard::new().expect("child clipboard");
-        cb.set_text(text.to_owned()).expect("child set");
-    }
-
-    pub fn child_spam(n: usize) {
-        let mut cb = Clipboard::new().expect("child clipboard");
-        for i in 0..n {
-            let _ = cb.set_text(format!("FOREIGN-{i}"));
-            std::thread::sleep(Duration::from_millis(3));
-        }
+    pub fn child_hold(ms: u64) {
+        let b = Win32Backend::new().expect("window");
+        // SAFETY: own window handle; closed below.
+        unsafe { windows_sys::Win32::System::DataExchange::OpenClipboard(b.hwnd()) };
+        std::thread::sleep(Duration::from_millis(ms));
+        // SAFETY: paired with OpenClipboard.
+        unsafe { windows_sys::Win32::System::DataExchange::CloseClipboard() };
     }
 }
 
@@ -274,8 +180,10 @@ mod imp {
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     match a.get(1).map(String::as_str) {
-        Some("child-write") => imp::child_write(&a[2]),
-        Some("child-spam") => imp::child_spam(a[2].parse().unwrap()),
-        _ => imp::run(&a[0]),
+        Some("legacy-arboard") => legacy::imp::run(&a[0]),
+        Some("child-write") => legacy::imp::child_write(&a[2]),
+        Some("child-spam") => legacy::imp::child_spam(a[2].parse().unwrap()),
+        Some("child-hold") => v2::child_hold(a[2].parse().unwrap()),
+        _ => v2::run(&a[0]),
     }
 }

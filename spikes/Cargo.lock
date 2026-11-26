@@ -826,8 +826,10 @@ name = "win-clipboard"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "sha2",
  "windows",
  "windows-sys",
+ "zeroize",
 ]
 
 [[package]]
