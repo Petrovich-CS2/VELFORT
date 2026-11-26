@@ -1,4 +1,4 @@
-# VELFORT Phase 0.5 — Windows CI validation of spikes/ (NOT a production build).
+# VELFORT Phase 0.5/0.6 — Linux CI + Windows CI validation of spikes/ (NOT a production build).
 # Runs on GitHub-hosted windows-latest (Windows Server, not Windows 11). Results are reported as
 # "Windows CI" and never as "physical Windows 11". No secrets are used; read-only token.
 name: phase05-windows-spikes
@@ -17,6 +17,37 @@ env:
   RUST_TOOLCHAIN: "1.97.0"
 
 jobs:
+  linux-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: spikes
+    steps:
+      - uses: actions/checkout@v4
+      - name: Environment and toolchain
+        run: |
+          uname -a; nproc; free -m | head -2
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+          rustc -V; python3 -V
+      - name: Tests (platform-independent spikes)
+        run: cargo test --release --locked -p vault-crypto-proto -p aead-stream-audit -p argon2-memory -p win-clipboard
+      - name: "F-1 Argon2 residue meter (Linux)"
+        run: |
+          cargo build --release --locked -p argon2-memory
+          for cfg in "65536 3 4" "64 3 1"; do
+            ./target/release/argon2-memory reference "$RUNNER_TEMP/fp.bin" $cfg
+            for v in positive-control-leak lib-default own-nozero own-zeroizing own-zeroizing-scrub thread-zeroizing-scrub; do
+              ./target/release/argon2-memory probe $v "$RUNNER_TEMP/fp.bin" $cfg
+            done
+          done
+      - name: Tauri configuration guard (+ self-test)
+        run: |
+          python3 tauri-shell/ci/check_config.py tauri-shell/src-tauri
+          python3 tauri-shell/ci/check_config.py --selftest tauri-shell/src-tauri
+
   spikes-core:
     runs-on: windows-latest
     timeout-minutes: 60
@@ -42,8 +73,8 @@ jobs:
       - name: Build spikes (release)
         run: cargo build --release --locked --workspace
 
-      - name: Tests (vault-crypto-proto, aead-stream-audit)
-        run: cargo test --release --locked -p vault-crypto-proto -p aead-stream-audit
+      - name: Tests (all spike unit/integration tests)
+        run: cargo test --release --locked -p vault-crypto-proto -p aead-stream-audit -p argon2-memory -p win-clipboard
 
       - name: "W1 Argon2id benchmark (sequential lanes, default features)"
         continue-on-error: true
@@ -67,12 +98,26 @@ jobs:
         continue-on-error: true
         run: .\target\release\win-memory.exe
 
-      - name: "W3 Clipboard (history enabled via HKCU for this session)"
+      - name: "F-1 Argon2 residue meter (Windows)"
+        continue-on-error: true
+        run: |
+          foreach ($cfg in @(@(65536,3,4), @(64,3,1))) {
+            .\target\release\argon2-memory.exe reference "$env:RUNNER_TEMP\fp.bin" $cfg[0] $cfg[1] $cfg[2]
+            foreach ($v in 'positive-control-leak','lib-default','own-nozero','own-zeroizing','own-zeroizing-scrub','thread-zeroizing-scrub') {
+              .\target\release\argon2-memory.exe probe $v "$env:RUNNER_TEMP\fp.bin" $cfg[0] $cfg[1] $cfg[2]
+            }
+          }
+
+      - name: "W3 Clipboard v2 secret writer (Phase 0.6)"
+        continue-on-error: true
+        run: .\target\release\win-clipboard.exe run
+
+      - name: "W3 Clipboard legacy arboard run (Phase 0.5, history enabled via HKCU)"
         continue-on-error: true
         run: |
           New-Item -Path 'HKCU:\Software\Microsoft\Clipboard' -Force | Out-Null
           Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Clipboard' -Name EnableClipboardHistory -Value 1 -Type DWord
-          .\target\release\win-clipboard.exe run
+          .\target\release\win-clipboard.exe legacy-arboard
 
       - name: "W9 Native password prompt prototype"
         continue-on-error: true
@@ -160,6 +205,12 @@ jobs:
           $k='HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
           if (Test-Path $k) { "WebView2 Runtime pv: $((Get-ItemProperty $k).pv)" } else { "WebView2 Runtime: registry key not found" }
 
+      - name: Tauri configuration guard (+ self-test)
+        working-directory: spikes/tauri-shell
+        run: |
+          python ci/check_config.py src-tauri
+          python ci/check_config.py --selftest src-tauri
+
       - name: Build scan-dir helper
         working-directory: spikes
         run: cargo build --release --locked -p win-memory --bin scan-dir
@@ -190,6 +241,10 @@ jobs:
           "app_local_data_dir: $udf"
           Get-ChildItem -Recurse $udf -Directory -ErrorAction SilentlyContinue | Select-Object -First 40 | ForEach-Object { $_.FullName }
           .\spikes\target\release\scan-dir.exe $udf $r.canary_master $r.canary_item
+          "== Chromium credential/form stores present in UDF (names only):"
+          Get-ChildItem -Recurse $udf -File -Include 'Login Data*','Web Data*','*Autofill*' -ErrorAction SilentlyContinue | Format-Table FullName,Length
+          "== Crashpad / failure report folder contents:"
+          Get-ChildItem -Recurse (Join-Path $udf 'EBWebView\Crashpad') -File -ErrorAction SilentlyContinue | Format-Table FullName,Length,LastWriteTime
           "== ACL of app_local_data_dir"; icacls $udf
 
       - name: "W7 Install (perMachine) / ACL / run / uninstall / data retention"
