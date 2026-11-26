@@ -81,15 +81,49 @@ fn hkdf_extract_expand(salt: &[u8], ikm: &[u8], info: &[u8]) -> Zeroizing<[u8; 3
     okm
 }
 
-/// Unicode NFC normalisation is required by the design; this spike does not pull in a
-/// normalisation crate and therefore only accepts the bytes as given (documented gap).
-pub fn derive_vault_kek(password: &[u8], salt: &[u8; 16], vault_id: &[u8; 16], p: KdfParams) -> Result<Kek, Error> {
-    let muk = argon2id(password, salt, p)?;
+/// Password transform identifier stored in vault and backup headers (bound into AAD).
+/// 1 = UTF-8 encoding of the Unicode NFC form (UAX #15) produced by `unicode-normalization` 0.1.
+/// NFKC/NFKD are deliberately NOT used: they remove distinctions (e.g. "ﬁ" vs "fi").
+pub const PW_TRANSFORM_NFC_UTF8: u8 = 1;
+
+/// Upper bound on the password length in bytes accepted by the KDF path (memory bound for NFC).
+pub const MAX_PASSWORD_BYTES: usize = 4096;
+
+/// The ONLY password-to-bytes conversion in the protocol. Every KDF entry point calls it, so
+/// create, unlock, change-password, backup and restore cannot diverge.
+///
+/// Memory: the output buffer is reserved up front (12 bytes per input byte is an upper bound:
+/// NFC expands at most 3x in code points and a code point is at most 4 bytes, while each input
+/// code point is at least 1 byte), so the String never reallocates and leaves no stale copy.
+pub fn normalize_password(password: &str, transform: u8) -> Result<Zeroizing<String>, Error> {
+    use unicode_normalization::UnicodeNormalization;
+    if transform != PW_TRANSFORM_NFC_UTF8 {
+        return Err(Error::Format("unknown password transform"));
+    }
+    if password.len() > MAX_PASSWORD_BYTES {
+        return Err(Error::Format("password too long"));
+    }
+    let cap = password.len() * 12 + 16;
+    let mut out = Zeroizing::new(String::with_capacity(cap));
+    for ch in password.nfc() {
+        out.push(ch);
+    }
+    if out.capacity() != cap {
+        // Would mean a reallocation happened (a stale copy may exist): treat as a hard error.
+        return Err(Error::Format("normalization buffer reallocated"));
+    }
+    Ok(out)
+}
+
+pub fn derive_vault_kek(password: &str, transform: u8, salt: &[u8; 16], vault_id: &[u8; 16], p: KdfParams) -> Result<Kek, Error> {
+    let pw = normalize_password(password, transform)?;
+    let muk = argon2id(pw.as_bytes(), salt, p)?;
     Ok(Kek(*hkdf_extract_expand(vault_id, &muk[..], b"VELFORT/v1/kek")))
 }
 
-pub fn derive_backup_kek(password: &[u8], salt: &[u8; 16], backup_id: &[u8; 16], p: KdfParams) -> Result<BackupKek, Error> {
-    let muk = argon2id(password, salt, p)?;
+pub fn derive_backup_kek(password: &str, transform: u8, salt: &[u8; 16], backup_id: &[u8; 16], p: KdfParams) -> Result<BackupKek, Error> {
+    let pw = normalize_password(password, transform)?;
+    let muk = argon2id(pw.as_bytes(), salt, p)?;
     Ok(BackupKek(*hkdf_extract_expand(backup_id, &muk[..], b"VELFORT/v1/backup-kek")))
 }
 

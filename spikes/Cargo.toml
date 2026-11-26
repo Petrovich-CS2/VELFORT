@@ -17,3 +17,4 @@ sha2 = "0.11"
 getrandom = "=0.4.3"
 zeroize = { version = "=1.9.2", features = ["derive"] }
 rusqlite = { version = "=0.43.0", features = ["bundled", "serialize"] }
+unicode-normalization = "=0.1.26"

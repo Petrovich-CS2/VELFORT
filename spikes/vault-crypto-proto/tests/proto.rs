@@ -12,7 +12,7 @@ use vault_crypto_proto::store::{change_password, create_vault, get_item, put_ite
 use vault_crypto_proto::{Error, seal};
 
 const T: KdfParams = KdfParams { m_kib: 1024, t: 1, p: 1 };
-const PW: &[u8] = b"correct horse battery staple";
+const PW: &str = "correct horse battery staple";
 const CANARY_S: &[u8] = b"VELFORT-CANARY-SUMMARY-7f3a";
 const CANARY_P: &[u8] = b"VELFORT-CANARY-PASSWORD-91c2";
 const BIG: u64 = 1 << 30;
@@ -68,7 +68,7 @@ fn roundtrip_and_wrong_password() {
     put_item(&c, &dek, &vid, &[1; 16], 1, 3, b"title", b"secret").unwrap();
     let (k, s, p) = get_item(&c, &dek, &vid, &[1; 16]).unwrap();
     assert_eq!((k, &s[..], &p[..]), (3, &b"title"[..], &b"secret"[..]));
-    assert_eq!(unlock(&c, b"wrong", true).err(), Some(Error::Auth));
+    assert_eq!(unlock(&c, "wrong", true).err(), Some(Error::Auth));
     assert!(unlock(&c, PW, true).is_ok());
 }
 
@@ -161,14 +161,14 @@ fn change_password_rewraps_without_reencrypting_items() {
     let (mut c, dek, vid) = vault(dir.path());
     put_item(&c, &dek, &vid, &[1; 16], 1, 3, b"t", b"p").unwrap();
     let before: (Vec<u8>, Vec<u8>, Vec<u8>) = c.query_row("SELECT i.payload, h.salt, h.wrapped_dek FROM items i, vault_header h", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
-    assert_eq!(change_password(&mut c, b"bad", b"new", T, true).err(), Some(Error::Auth));
-    change_password(&mut c, PW, b"new password", T, true).unwrap();
+    assert_eq!(change_password(&mut c, "bad", "new", T, true).err(), Some(Error::Auth));
+    change_password(&mut c, PW, "new password", T, true).unwrap();
     let after: (Vec<u8>, Vec<u8>, Vec<u8>) = c.query_row("SELECT i.payload, h.salt, h.wrapped_dek FROM items i, vault_header h", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
     assert_eq!(before.0, after.0, "item ciphertext untouched");
     assert_ne!(before.1, after.1, "new salt");
     assert_ne!(before.2, after.2, "new wrap");
     assert_eq!(unlock(&c, PW, true).err(), Some(Error::Auth));
-    let (d2, _) = unlock(&c, b"new password", true).unwrap();
+    let (d2, _) = unlock(&c, "new password", true).unwrap();
     assert_eq!(get_item(&c, &d2, &vid, &[1; 16]).unwrap().2, b"p");
 }
 
@@ -240,7 +240,7 @@ fn backup_uses_separate_salt_and_key_context() {
 fn backup_requires_current_master_password() {
     let dir = tempfile::tempdir().unwrap();
     let (mut c, _, _) = vault(dir.path());
-    let r = create_backup(&mut c, b"wrong", T, true, BIG, &dir.path().join("x.velfort-backup"));
+    let r = create_backup(&mut c, "wrong", T, true, BIG, &dir.path().join("x.velfort-backup"));
     assert_eq!(r.err(), Some(Error::Auth));
     assert!(!dir.path().join("x.velfort-backup").exists());
 }
@@ -249,10 +249,11 @@ fn backup_requires_current_master_password() {
 fn backup_wrong_password_and_tampering_are_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let (_, b) = setup_backup(dir.path());
-    assert_eq!(verify_backup(&b, b"wrong", true, BIG).err(), Some(Error::Auth));
+    assert_eq!(verify_backup(&b, "wrong", true, BIG).err(), Some(Error::Auth));
     let raw = std::fs::read(&b).unwrap();
     // Flip one bit in every region: magic, format, header (each field), wrapped key, nonce, ct, tag.
-    let probes = [0usize, 15, 17, 21, 21 + 16, 21 + 24, 21 + 40, 21 + 52, 21 + 68, 97, 97 + 30, 171 + 2, 171 + 26, raw.len() / 2, raw.len() - 1];
+    // layout (format 2): prefix 21 | header 77 (pw_transform at 21+76) | wrapped 74 at 98 | payload env at 172
+    let probes = [0usize, 15, 17, 21, 21 + 16, 21 + 24, 21 + 40, 21 + 52, 21 + 68, 21 + 76, 98, 98 + 30, 172 + 2, 172 + 26, raw.len() / 2, raw.len() - 1];
     for &i in &probes {
         let mut x = raw.clone();
         x[i] ^= 0x01;
@@ -323,7 +324,7 @@ fn no_plaintext_canaries_in_vault_backup_or_restored_files() {
     for entry in std::fs::read_dir(dir.path()).unwrap() {
         let p = entry.unwrap().path();
         let data = std::fs::read(&p).unwrap();
-        for canary in [CANARY_S, CANARY_P, PW] {
+        for canary in [CANARY_S, CANARY_P, PW.as_bytes()] {
             assert!(!contains(&data, canary), "{} contains utf8 canary", p.display());
             assert!(!contains(&data, &utf16le(canary)), "{} contains utf16 canary", p.display());
         }

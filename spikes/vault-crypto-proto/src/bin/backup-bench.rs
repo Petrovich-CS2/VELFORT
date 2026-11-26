@@ -13,7 +13,7 @@ use vault_crypto_proto::keys::KdfParams;
 use vault_crypto_proto::store::{create_vault, put_item};
 
 const T: KdfParams = KdfParams { m_kib: 1024, t: 1, p: 1 };
-const PW: &[u8] = b"bench password";
+const PW: &str = "bench password";
 
 #[cfg(target_os = "linux")]
 fn peak_mib() -> String {

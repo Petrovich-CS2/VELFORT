@@ -1,7 +1,8 @@
 //! AAD construction per docs/CRYPTOGRAPHY.md §4.2 (revision 2).
 
 pub const DOMAIN: &[u8; 8] = b"VELFORT\0";
-pub const FORMAT_VERSION: u16 = 1;
+/// 2 = Phase 0.6: vault header carries `pw_transform` (bound into the HEADER_WRAP AAD).
+pub const FORMAT_VERSION: u16 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]

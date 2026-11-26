@@ -3,12 +3,13 @@
 //! 2) size check, 3) ONE XChaCha20-Poly1305 call (in place), 4) write to a NEW file, 5) verify.
 //!
 //! File layout (all integers little-endian):
-//!   MAGIC "VELFORT-BACKUP\0" (15) | format u16 | header_len u32 | header (76) |
+//!   MAGIC "VELFORT-BACKUP\0" (15) | format u16 | header_len u32 | header (77) |
 //!   wrapped_bk envelope (74) | payload envelope: ver(1) alg(1) nonce(24) ct(payload_len) tag(16)
-//! header = backup_id(16) created_at(u64) source_vault_id(16) kdf m,t,p (u32 x3) salt(16) payload_len(u64)
+//! header = backup_id(16) created_at(u64) source_vault_id(16) kdf m,t,p (u32 x3) salt(16) payload_len(u64) pw_transform(u8)
+//! Format 2 (Phase 0.6): adds pw_transform (1 = UTF-8 NFC), bound into both AADs via the header bytes.
 
 use crate::fsutil::{same_existing_file, write_new_file_no_replace};
-use crate::keys::{BackupContentKey, KdfParams, derive_backup_kek};
+use crate::keys::{BackupContentKey, KdfParams, PW_TRANSFORM_NFC_UTF8, derive_backup_kek};
 use crate::seal::{self, AEAD_XCHACHA20POLY1305, ENVELOPE_VERSION};
 use crate::store::{APPLICATION_ID, read_header, unlock};
 use crate::{Error, random};
@@ -19,8 +20,8 @@ use std::path::Path;
 use zeroize::{Zeroize, Zeroizing};
 
 pub const MAGIC: &[u8; 15] = b"VELFORT-BACKUP\0";
-pub const FORMAT: u16 = 1;
-const HEADER_LEN: usize = 76;
+pub const FORMAT: u16 = 2;
+const HEADER_LEN: usize = 77;
 const WRAPPED_LEN: usize = 2 + 24 + 32 + 16;
 const PREFIX_LEN: usize = 15 + 2 + 4;
 /// Per-message limit of chacha20poly1305 0.11.0 (src/cipher.rs: len/64 >= u32::MAX -> Error).
@@ -33,6 +34,7 @@ pub struct BackupHeader {
     pub kdf: KdfParams,
     pub salt: [u8; 16],
     pub payload_len: u64,
+    pub pw_transform: u8,
 }
 
 impl BackupHeader {
@@ -46,6 +48,7 @@ impl BackupHeader {
         b[48..52].copy_from_slice(&self.kdf.p.to_le_bytes());
         b[52..68].copy_from_slice(&self.salt);
         b[68..76].copy_from_slice(&self.payload_len.to_le_bytes());
+        b[76] = self.pw_transform;
         b
     }
     fn decode(b: &[u8]) -> Result<Self, Error> {
@@ -61,6 +64,7 @@ impl BackupHeader {
             kdf: KdfParams { m_kib: u32_at(40), t: u32_at(44), p: u32_at(48) },
             salt: b[52..68].try_into().unwrap(),
             payload_len: u64_at(68),
+            pw_transform: b[76],
         })
     }
 }
@@ -95,7 +99,7 @@ pub struct CreateReport {
 /// Requires the Master Password again (separate salt + Argon2id context for the backup KEK).
 pub fn create_backup(
     conn: &mut Connection,
-    password: &[u8],
+    password: &str,
     kdf: KdfParams,
     allow_test_params: bool,
     max_snapshot_bytes: u64,
@@ -134,10 +138,11 @@ pub fn create_backup(
         kdf,
         salt: random()?, // separate salt, never the vault salt
         payload_len: snapshot_bytes as u64,
+        pw_transform: PW_TRANSFORM_NFC_UTF8,
     }
     .encode();
     let hdr = BackupHeader::decode(&header)?;
-    let kek_b = derive_backup_kek(password, &hdr.salt, &hdr.backup_id, kdf)?;
+    let kek_b = derive_backup_kek(password, hdr.pw_transform, &hdr.salt, &hdr.backup_id, kdf)?;
     let bk = BackupContentKey::generate()?;
     let wrapped = seal::seal(kek_b.bytes(), bk.bytes(), &wrap_aad(&header))?;
     debug_assert_eq!(wrapped.len(), WRAPPED_LEN);
@@ -164,7 +169,7 @@ pub fn create_backup(
 }
 
 /// Decrypts and fully verifies a backup IN MEMORY. Returns the plaintext SQLite image.
-pub fn verify_backup(path: &Path, password: &[u8], allow_test_params: bool, max_snapshot_bytes: u64) -> Result<Zeroizing<Vec<u8>>, Error> {
+pub fn verify_backup(path: &Path, password: &str, allow_test_params: bool, max_snapshot_bytes: u64) -> Result<Zeroizing<Vec<u8>>, Error> {
     let meta = std::fs::metadata(path)?;
     let fixed = (PREFIX_LEN + HEADER_LEN + WRAPPED_LEN + 26 + 16) as u64;
     if meta.len() < fixed {
@@ -190,7 +195,7 @@ pub fn verify_backup(path: &Path, password: &[u8], allow_test_params: bool, max_
         return Err(Error::Format("payload length mismatch (truncated or extended file)"));
     }
     let wrapped = &raw[PREFIX_LEN + HEADER_LEN..PREFIX_LEN + HEADER_LEN + WRAPPED_LEN];
-    let kek_b = derive_backup_kek(password, &hdr.salt, &hdr.backup_id, hdr.kdf)?;
+    let kek_b = derive_backup_kek(password, hdr.pw_transform, &hdr.salt, &hdr.backup_id, hdr.kdf)?;
     let bk_pt = seal::open(kek_b.bytes(), wrapped, &wrap_aad(header))?; // wrong password => Auth
     let bk = BackupContentKey::from_bytes(bk_pt[..].try_into().map_err(|_| Error::Format("bk len"))?);
     let env = &raw[PREFIX_LEN + HEADER_LEN + WRAPPED_LEN..];
@@ -227,7 +232,7 @@ pub fn verify_backup(path: &Path, password: &[u8], allow_test_params: bool, max_
 /// Restores ONLY into a new file. Refuses an existing target and refuses target == source.
 pub fn restore_to_new(
     backup: &Path,
-    password: &[u8],
+    password: &str,
     target: &Path,
     allow_test_params: bool,
     max_snapshot_bytes: u64,
