@@ -1,0 +1,14 @@
+[package]
+name = "argon2-memory"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Phase 0.6 / F-1: measure residual Argon2id working memory after key derivation (spike)."
+
+[dependencies]
+argon2 = { workspace = true, features = ["zeroize"] }
+zeroize = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+win-memory = { path = "../win-memory" }

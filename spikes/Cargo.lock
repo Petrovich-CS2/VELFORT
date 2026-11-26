@@ -71,6 +71,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "argon2-memory"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "win-memory",
+ "zeroize",
+]
+
+[[package]]
 name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

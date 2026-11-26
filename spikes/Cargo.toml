@@ -2,7 +2,7 @@
 # Separate workspace: nothing here is linked into velfort-core or src-tauri.
 [workspace]
 resolver = "3"
-members = ["argon2-bench", "vault-crypto-proto", "sqlite-crash", "aead-stream-audit", "win-memory", "win-clipboard", "win-native-prompt"]
+members = ["argon2-bench", "argon2-memory", "vault-crypto-proto", "sqlite-crash", "aead-stream-audit", "win-memory", "win-clipboard", "win-native-prompt"]
 
 [workspace.package]
 edition = "2024"

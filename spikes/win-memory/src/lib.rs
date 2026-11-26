@@ -54,6 +54,41 @@ pub mod scan {
         }
     }
 
+    /// Calls `f(base_address, bytes, scan_buffer_range)` for every committed, readable region of
+    /// process `pid` (regions larger than 512 MiB are skipped). `scan_buffer_range` is the address
+    /// range of this function's own copy buffer: when scanning our own process, matches inside it
+    /// are copies made by the scanner and must be ignored by the caller.
+    /// Returns false if the process cannot be opened.
+    pub fn visit_process_memory(pid: u32, mut f: impl FnMut(usize, &[u8], (usize, usize))) -> bool {
+        // SAFETY: plain Win32 calls; the handle is closed; the buffer is sized from region info.
+        unsafe {
+            let h: HANDLE = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid);
+            if h.is_null() {
+                return false;
+            }
+            let mut addr: usize = 0;
+            let mut mbi: MEMORY_BASIC_INFORMATION = core::mem::zeroed();
+            let mut buf: Vec<u8> = Vec::new();
+            while VirtualQueryEx(h, addr as *const _, &mut mbi, core::mem::size_of::<MEMORY_BASIC_INFORMATION>()) != 0 {
+                let size = mbi.RegionSize;
+                if mbi.State == MEM_COMMIT && mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD) == 0 && size <= 512 * 1024 * 1024 {
+                    buf.resize(size, 0);
+                    let ex = (buf.as_ptr() as usize, buf.as_ptr() as usize + buf.capacity());
+                    let mut read = 0usize;
+                    if ReadProcessMemory(h, mbi.BaseAddress, buf.as_mut_ptr().cast(), size, &mut read) != 0 || read > 0 {
+                        f(mbi.BaseAddress as usize, &buf[..read], ex);
+                    }
+                }
+                addr = mbi.BaseAddress as usize + size;
+                if size == 0 {
+                    break;
+                }
+            }
+            CloseHandle(h);
+            true
+        }
+    }
+
     /// All processes whose executable name matches `exe` (case-insensitive).
     pub fn pids_by_name(exe: &str) -> Vec<u32> {
         let mut v = Vec::new();
