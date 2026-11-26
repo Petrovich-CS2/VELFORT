@@ -66,7 +66,7 @@ NFC (`unicode-normalization`) — утверждено владельцем, р�
 | `argon2-memory` unit (5) | PASS | PASS (шаг) | PASS (шаг) |
 | `win-clipboard` логика (14) | PASS | PASS (шаг) | PASS (шаг) |
 | Измеритель остатков Argon2 | 0/0 в выбранном варианте | выполнен (шаг success) | 0/0 в выбранном варианте |
-| Writer v2 на реальном буфере (13 проверок) | NOT TESTED (Win32) | NOT TESTED | PASS |
+| Writer v2 на реальном буфере (14 проверок PASS) | NOT TESTED (Win32) | NOT TESTED | PASS |
 | Tauri guard + самопроверка | PASS | PASS | PASS |
 | WebView2 настройки / ACL / CSP / дампы | NOT TESTED | NOT TESTED | PASS / PASS / PASS / результат зафиксирован |
 | clippy (Linux; Windows-target для pure-Rust спайков) | 0 предупреждений | — | — |
