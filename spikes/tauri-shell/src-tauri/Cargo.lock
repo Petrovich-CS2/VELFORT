@@ -4016,7 +4016,10 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "webview2-com",
  "win-memory",
+ "windows",
+ "windows-core",
  "zeroize",
 ]
 

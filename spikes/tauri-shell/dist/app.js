@@ -1,8 +1,10 @@
-// VELFORT Phase 0.5 spike frontend (classic script, global Tauri API). Runs automatically.
+// VELFORT Phase 0.5/0.6 spike frontend (classic script). Runs automatically.
+// Phase 0.6 (D-P13): withGlobalTauri=false, so window.__TAURI__ is absent. We call the same
+// internal entry point that @tauri-apps/api 2.12.5 core.invoke uses (core.js: __TAURI_INTERNALS__.invoke).
 // Canary values are generated at runtime so that no literal appears in this source file.
 (function () {
   "use strict";
-  const invoke = window.__TAURI__.core.invoke;
+  const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args || {});
   const out = {};
   const log = (k, v) => { out[k] = v; document.getElementById("log").textContent += k + ": " + JSON.stringify(v) + "\n"; };
   const rnd = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), b => b.toString(16).padStart(2, "0")).join("");
@@ -47,7 +49,8 @@
     try { eval("1+1"); log("csp_eval_blocked", false); } catch (e) { log("csp_eval_blocked", true); }
 
     log("isolation_hook_present_in_main_frame", typeof window.__TAURI_ISOLATION_HOOK__ !== "undefined");
-    log("tauri_globals", Object.keys(window.__TAURI__ || {}).sort());
+    log("global_tauri_namespace_present", typeof window.__TAURI__ !== "undefined");
+    log("tauri_internals_keys", Object.keys(window.__TAURI_INTERNALS__ || {}).sort());
     try { localStorage.setItem("velfort-ui-pref", "theme=dark"); log("localstorage_available", true); } catch (e) { log("localstorage_available", false); }
 
     await invoke("spike_phase", { phase: "before_reload", js: out });
@@ -57,7 +60,8 @@
   async function stage2() {
     await new Promise(r => setTimeout(r, 1500));
     await invoke("spike_phase", { phase: "after_reload", js: {} });
-    await invoke("spike_finish");
+    // D-P10: renderer crash; Rust records dumps and exits ~10 s later.
+    await invoke("spike_crash");
   }
 
   window.addEventListener("load", async () => {

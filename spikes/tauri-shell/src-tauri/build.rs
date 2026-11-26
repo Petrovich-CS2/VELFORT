@@ -3,7 +3,7 @@ fn main() {
     // in invoke_handler but deliberately NOT listed here, so no permission exists for it.
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(
-            tauri_build::AppManifest::new().commands(&["spike_stage", "spike_unlock", "spike_reveal", "spike_phase", "spike_finish"]),
+            tauri_build::AppManifest::new().commands(&["spike_stage", "spike_unlock", "spike_reveal", "spike_phase", "spike_finish", "spike_crash"]),
         ),
     )
     .expect("tauri build");

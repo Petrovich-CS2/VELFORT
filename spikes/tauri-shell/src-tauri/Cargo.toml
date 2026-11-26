@@ -20,6 +20,11 @@ zeroize = "=1.9.2"
 
 [target.'cfg(windows)'.dependencies]
 win-memory = { path = "../../win-memory" }
+# Already in the dependency graph via tauri-runtime-wry/wry (same versions); used only to read
+# and set WebView2 settings and to probe crash-dump behaviour in this spike.
+webview2-com = "=0.39.1"
+windows = { version = "=0.62.2", features = ["Win32_System_Com"] }
+windows-core = "=0.62.2"
 
 [profile.release]
 panic = "abort"
