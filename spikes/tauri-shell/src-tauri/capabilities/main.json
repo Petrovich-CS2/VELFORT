@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Single capability for the single window 'main' (spike).",
+  "windows": ["main"],
+  "permissions": [
+    "allow-spike-stage",
+    "allow-spike-unlock",
+    "allow-spike-reveal",
+    "allow-spike-phase",
+    "allow-spike-finish"
+  ]
+}

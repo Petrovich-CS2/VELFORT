@@ -1,0 +1,19 @@
+# VELFORT Phase 0.5 spikes — NOT part of the production application.
+# Separate workspace: nothing here is linked into velfort-core or src-tauri.
+[workspace]
+resolver = "3"
+members = ["argon2-bench", "vault-crypto-proto", "sqlite-crash", "aead-stream-audit", "win-memory", "win-clipboard", "win-native-prompt"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+argon2 = { version = "=0.6.0", default-features = false, features = ["alloc"] }
+chacha20poly1305 = { version = "=0.11.0" }
+hkdf = "=0.13.0"
+sha2 = "0.11"
+getrandom = "=0.4.3"
+zeroize = { version = "=1.9.2", features = ["derive"] }
+rusqlite = { version = "=0.43.0", features = ["bundled", "serialize"] }

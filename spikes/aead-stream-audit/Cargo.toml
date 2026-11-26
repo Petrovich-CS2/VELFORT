@@ -1,0 +1,11 @@
+[package]
+name = "aead-stream-audit"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# W11: isolated evaluation of aead-stream. NOT to be added to any production dependency graph.
+[dependencies]
+aead-stream = { version = "=0.6.0", features = ["alloc"] }
+chacha20poly1305 = { workspace = true }

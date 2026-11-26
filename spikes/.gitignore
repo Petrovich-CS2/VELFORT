@@ -1,0 +1,3 @@
+target/
+tauri-shell/src-tauri/target/
+tauri-shell/src-tauri/gen/

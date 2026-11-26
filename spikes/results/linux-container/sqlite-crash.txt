@@ -1,0 +1,22 @@
+sqlite version: 3.54.1
+CHECK pragmas: PASS journal_mode=delete synchronous=2 (2=FULL) secure_delete=1
+CHECK journal_exists_during_write_txn: PASS exists=true
+CHECK journal_contains_original_page_content: INFO old canary in journal during txn = true (rollback journal stores ORIGINAL pages)
+CHECK no_journal_after_normal_close: PASS exists=false
+child: journal exists before abort = true
+CHECK child_exit: INFO ExitStatus(unix_wait_status(6))
+CHECK hot_journal_left_after_crash: PASS exists=true, size=516616
+CHECK db_file_contains_uncommitted_new_value_before_recovery: INFO true
+CHECK recovery_integrity_check: PASS ok
+CHECK recovery_header_is_old_value: PASS critical row rolled back
+CHECK recovery_no_partial_item_updates: PASS rows with new value = 0
+CHECK journal_removed_after_recovery: PASS exists=false
+CHECK db_file_contains_new_value_after_recovery: INFO false (rolled-back page images may persist in free space only if not overwritten)
+CHECK secure_delete_on_deleted_row_not_in_file: PASS deleted canary present=false
+CHECK secure_delete_on_overwritten_header_old_value_in_file: INFO false
+CHECK secure_delete_off_deleted_row_in_file: INFO deleted canary present=true
+CHECK secure_delete_off_overwritten_header_old_value_in_file: INFO false
+CHECK sqlite_full_error_returned: PASS database or disk is full
+CHECK sqlite_full_rollback_keeps_old_header: PASS integrity=ok
+CHECK fs_full_error_returned: PASS Some("database or disk is full") None
+CHECK fs_full_old_header_and_integrity: PASS integrity=ok
